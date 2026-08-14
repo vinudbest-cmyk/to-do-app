@@ -5,14 +5,20 @@
 **Goal:** Stand up a free Neon Postgres database and give the app a working,
 migrated Prisma schema for `User`, `List`, `ListMember`, and `Item`.
 
-**Architecture:** Prisma connects to Neon over two URLs — a pooled
-`DATABASE_URL` for normal app queries and a direct `DIRECT_URL` for running
-migrations (Neon's connection pooler doesn't support the advisory locks
-`prisma migrate` needs). The schema is defined in `prisma/schema.prisma`,
-applied with `prisma migrate dev`, and verified with a smoke-test script that
-exercises every model and relation end-to-end — there's no application code
-yet, so "testing" here means proving the schema and migration actually work
-against the real database, not unit-testing logic.
+**Architecture:** Prisma 7 removed the ability to put a connection URL
+directly in `schema.prisma` — connections now go through a **driver
+adapter** (`@prisma/adapter-pg`, wrapping the standard `pg` driver) passed
+to the `PrismaClient` constructor, plus a `prisma.config.ts` file that
+tells the CLI/Migrate which URL to use. We still keep Neon's two
+connection strings — a pooled `DATABASE_URL` for the adapter the app uses
+at runtime, and a direct `DIRECT_URL` for `prisma.config.ts`/Migrate —
+since Neon's pooler still doesn't support holding an advisory lock across
+statements, which migrations rely on. The schema is defined in
+`prisma/schema.prisma`, applied with `prisma migrate dev`, and verified
+with a smoke-test script that exercises every model and relation
+end-to-end — there's no application code yet, so "testing" here means
+proving the schema and migration actually work against the real database,
+not unit-testing logic.
 
 **Tech Stack:** Next.js 16.3.0 (App Router), TypeScript, Prisma ORM,
 PostgreSQL via Neon, Node v24, npm.
@@ -39,6 +45,15 @@ PostgreSQL via Neon, Node v24, npm.
   instead of the older default of generating into `node_modules/@prisma/client`.
   Every import of `PrismaClient` in this plan and beyond must point at
   `app/generated/prisma`, not `@prisma/client`.
+- Prisma 7 also requires a driver adapter for every database connection —
+  `schema.prisma`'s `datasource` block can only have `provider`, no `url`/
+  `directUrl`. Connection URLs live in `prisma.config.ts` (read by the CLI/
+  Migrate) and are passed to a `PrismaPg` adapter instance (from
+  `@prisma/adapter-pg`) wherever `PrismaClient` is constructed. Confirmed
+  against Prisma's official v7 upgrade guide; the main residual uncertainty
+  is whether Neon's pooled-vs-direct split is still strictly required for
+  Migrate under the new engine — we keep both URLs anyway since there's no
+  cost to doing so.
 
 ---
 
@@ -48,12 +63,16 @@ PostgreSQL via Neon, Node v24, npm.
 - Create: `prisma/schema.prisma` (via `prisma init`)
 - Create: `.env` (via `prisma init`, then hand-edited — gitignored, never committed)
 - Create: `.env.example` (committed — documents required vars with no real values)
-- Modify: `package.json` (adds `prisma` and `@prisma/client` as dependencies)
+- Create: `prisma.config.ts` (project root — tells the CLI/Migrate which URL to use)
+- Modify: `package.json` (adds `prisma`, `@prisma/client`, `@prisma/adapter-pg`, `pg`, `dotenv` as dependencies)
 
 **Interfaces:**
 - Produces: a reachable Postgres database; `DATABASE_URL` and `DIRECT_URL`
-  environment variables; an empty `prisma/schema.prisma` with the
-  `datasource`/`generator` blocks that Task 2 will add models into.
+  environment variables; `prisma.config.ts` configured for Migrate; an
+  empty `prisma/schema.prisma` with the `datasource`/`generator` blocks
+  (no `url`/`directUrl` — Prisma 7 doesn't allow those in the schema file)
+  that Task 2 will add models into; the `PrismaPg` adapter pattern that
+  Task 3's smoke test will reuse to construct `PrismaClient`.
 
 - [ ] **Step 1: Create a free Neon project**
 
@@ -99,20 +118,49 @@ PostgreSQL via Neon, Node v24, npm.
   DIRECT_URL="paste-your-direct-connection-string-here"
   ```
 
-  Then update the `datasource` block in `prisma/schema.prisma` to use both
-  (leave the `generator` block above it exactly as `prisma init` created it —
-  Prisma 7's `prisma-client` generator with a custom `output` path is
-  expected and correct):
+  Leave `prisma/schema.prisma`'s `datasource` block exactly as `prisma init`
+  created it — just `provider = "postgresql"`, nothing else. Prisma 7
+  doesn't allow `url`/`directUrl` in the schema file anymore; that's what
+  `prisma.config.ts` (next step) and the driver adapter (Task 3) are for.
 
-  ```prisma
-  datasource db {
-    provider  = "postgresql"
-    url       = env("DATABASE_URL")
-    directUrl = env("DIRECT_URL")
-  }
+- [ ] **Step 3a: Install the driver adapter and config dependencies**
+
+  ```bash
+  npm install @prisma/adapter-pg pg
+  npm install --save-dev dotenv @types/pg
   ```
 
-- [ ] **Step 3b: Gitignore the generated Prisma client**
+  `@prisma/adapter-pg` is Prisma 7's supported way to connect to any
+  Postgres-wire-compatible database (including Neon) — it wraps the
+  standard `pg` driver. `dotenv` is needed because `prisma.config.ts` runs
+  as a plain Node/TypeScript file outside of Next.js, so it has to load
+  `.env` itself; Next.js normally does this for you automatically, but
+  this file runs via the Prisma CLI, not Next.js.
+
+- [ ] **Step 3b: Create `prisma.config.ts`**
+
+  Create a new file at the project root (same level as `package.json`):
+
+  ```typescript
+  import "dotenv/config";
+  import { defineConfig, env } from "prisma/config";
+
+  export default defineConfig({
+    schema: "prisma/schema.prisma",
+    migrations: {
+      path: "prisma/migrations",
+    },
+    datasource: {
+      url: env("DIRECT_URL"),
+    },
+  });
+  ```
+
+  This is what the Prisma CLI (`migrate dev`, `studio`, etc.) reads to know
+  which database to talk to — deliberately the *direct* URL, so migrations
+  don't hit the pooler.
+
+- [ ] **Step 3c: Gitignore the generated Prisma client**
 
   Prisma 7's generator writes the client into `app/generated/prisma/` inside
   the project (not hidden away in `node_modules` like older versions did).
@@ -152,7 +200,7 @@ PostgreSQL via Neon, Node v24, npm.
 - [ ] **Step 6: Commit**
 
   ```bash
-  git add prisma/schema.prisma .env.example .gitignore package.json package-lock.json
+  git add prisma/schema.prisma prisma.config.ts .env.example .gitignore package.json package-lock.json
   git commit -m "Add Prisma, connect to Neon database"
   ```
 
@@ -254,7 +302,8 @@ PostgreSQL via Neon, Node v24, npm.
 - Modify: `package.json` (adds `tsx` dev dependency and a `db:smoke-test` script)
 
 **Interfaces:**
-- Consumes: the four models from Task 2; `DATABASE_URL`/`DIRECT_URL` from Task 1.
+- Consumes: the four models from Task 2; `DATABASE_URL`/`DIRECT_URL` and the
+  `PrismaPg` adapter pattern from Task 1.
 - Produces: applied migration in the real Neon database; a repeatable
   `npm run db:smoke-test` command that later milestones can reuse as a
   quick "is the DB actually working" check.
@@ -293,9 +342,12 @@ PostgreSQL via Neon, Node v24, npm.
   Create `scripts/smoke-test-schema.ts`:
 
   ```typescript
+  import "dotenv/config";
   import { PrismaClient } from "../app/generated/prisma";
+  import { PrismaPg } from "@prisma/adapter-pg";
 
-  const prisma = new PrismaClient();
+  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+  const prisma = new PrismaClient({ adapter });
 
   async function main() {
     const user = await prisma.user.create({
