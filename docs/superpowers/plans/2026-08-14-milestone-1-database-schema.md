@@ -43,8 +43,11 @@ PostgreSQL via Neon, Node v24, npm.
 - This project is on Prisma 7 (`prisma@^7.9.1`), which defaults to the newer
   `prisma-client` generator with a custom `output` path (`app/generated/prisma`)
   instead of the older default of generating into `node_modules/@prisma/client`.
-  Every import of `PrismaClient` in this plan and beyond must point at
-  `app/generated/prisma`, not `@prisma/client`.
+  The generated folder has no `index.ts` — only `client.ts` — so every
+  import of `PrismaClient` in this plan and beyond must point at
+  `app/generated/prisma/client`, not `@prisma/client` and not the bare
+  `app/generated/prisma` directory (confirmed by listing the folder after
+  the first `MODULE_NOT_FOUND` attempt).
 - Prisma 7 also requires a driver adapter for every database connection —
   `schema.prisma`'s `datasource` block can only have `provider`, no `url`/
   `directUrl`. Connection URLs live in `prisma.config.ts` (read by the CLI/
@@ -218,8 +221,8 @@ PostgreSQL via Neon, Node v24, npm.
 - Consumes: `datasource`/`generator` blocks from Task 1.
 - Produces: four models — `User`, `List`, `ListMember`, `Item` — with the
   exact field names and relations Task 3's smoke test and all future
-  application code will import from `app/generated/prisma` (this project's
-  Prisma 7 generator output path, not the older `@prisma/client`).
+  application code will import from `app/generated/prisma/client` (this
+  project's Prisma 7 generator output path, not the older `@prisma/client`).
 
 - [ ] **Step 1: Add the four models to `prisma/schema.prisma`**
 
@@ -343,7 +346,7 @@ PostgreSQL via Neon, Node v24, npm.
 
   ```typescript
   import "dotenv/config";
-  import { PrismaClient } from "../app/generated/prisma";
+  import { PrismaClient } from "../app/generated/prisma/client";
   import { PrismaPg } from "@prisma/adapter-pg";
 
   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
