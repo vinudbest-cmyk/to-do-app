@@ -1,0 +1,53 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String?
+  memberships  ListMember[]
+  createdLists List[]       @relation("ListCreator")
+}
+
+model List {
+  id        String       @id @default(cuid())
+  title     String
+  createdAt DateTime     @default(now())
+  createdBy String
+  creator   User         @relation("ListCreator", fields: [createdBy], references: [id])
+  members   ListMember[]
+  items     Item[]
+}
+
+model ListMember {
+  id        String   @id @default(cuid())
+  listId    String
+  userId    String
+  createdAt DateTime @default(now())
+  list      List     @relation(fields: [listId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, userId])
+}
+
+model Item {
+  id           String    @id @default(cuid())
+  listId       String
+  text         String
+  reminderAt   DateTime
+  snoozedUntil DateTime?
+  completed    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  list         List      @relation(fields: [listId], references: [id], onDelete: Cascade)
+}
